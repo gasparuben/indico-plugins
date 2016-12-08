@@ -20,54 +20,46 @@ from indico.web.http_api.hooks.base import HTTPAPIHook
 from indico.modules.vc.models.vc_rooms import VCRoom, VCRoomStatus
 
 
-class VCRoomCleanUpAPI(HTTPAPIHook):
+class DeleteVCRoomAPI(HTTPAPIHook):
     PREFIX = 'api'
-    TYPES = ('deletevcroom', )
+    TYPES = ('deletevcroom',)
     RE = r'vidyo'
     GUEST_ALLOWED = False
-    VALID_FORMATS = ('json', )
+    VALID_FORMATS = ('json',)
     COMMIT = True
     HTTP_POST = True
-
-    # Just let the first 10 to be deleted
-    MAX_COUNT = 10
 
     def _hasAccess(self, aw):
         from indico_vc_vidyo.plugin import VidyoPlugin
         return aw.getUser().user in VidyoPlugin.settings.acls.get('managers')
 
     def _getParams(self):
-        super(VCRoomCleanUpAPI, self)._getParams()
-        self._room_ids = request.form.getlist('room_id')
+        super(DeleteVCRoomAPI, self)._getParams()
+        self._room_ids = map(int, request.form.getlist('rid'))
 
     def api_deletevcroom(self, aw):
         from indico_vc_vidyo.plugin import VidyoPlugin
+        from indico_vc_vidyo.api import APIException
+
         success = []
         failed = []
-        notexist_at_indico = []
+        not_in_db = []
 
-        counter = 0
-        for id in self._room_ids:
-            if counter > self.MAX_COUNT:
-                break
+        for rid in self._room_ids:
             room = VCRoom.query.filter(VCRoom.type == 'vidyo',
                                        VCRoom.status == VCRoomStatus.created,
-                                       VCRoom.data.contains({'vidyo_id': str(id)})).first()
+                                       VCRoom.data.contains({'vidyo_id': str(rid)})).first()
             if not room:
-                notexist_at_indico.append(id)
+                not_in_db.append(rid)
                 continue
             try:
                 room.plugin.delete_room(room, None)
-            except:
-                failed.append(room.data['vidyo_id'])
+            except APIException:
+                failed.append(rid)
                 VidyoPlugin.logger.exception('Could not delete VC room %s', room)
             else:
-                counter += 1
                 room.status = VCRoomStatus.deleted
-                success.append(room.data['vidyo_id'])
-                VidyoPlugin.logger.info('{} deleted', room)
+                success.append(rid)
+                VidyoPlugin.logger.info('%s deleted', room)
 
-        return {'success': '{}'.format(success),
-                'failed': '{}'.format(failed),
-                'notexist_at_indico': '{}'.format(notexist_at_indico)
-                }
+        return {'success': success, 'failed': failed, 'missing': not_in_db}
